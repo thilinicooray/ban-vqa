@@ -30,7 +30,7 @@ class vgg16_modified(nn.Module):
 
 
 class BanModel(nn.Module):
-    def __init__(self, n_verbs, glimpse=1,
+    def __init__(self, n_verbs, glimpse=4,
                  embed_hidden=300,
                  mlp_hidden=512):
         super(BanModel, self).__init__()
