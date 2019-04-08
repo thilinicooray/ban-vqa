@@ -9,13 +9,36 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.weight_norm import weight_norm
+import torchvision as tv
 import utils
+import utils_imsitu
 from attention import BiAttention
 from language_model import WordEmbedding, QuestionEmbedding
 from classifier import SimpleClassifier
 from fc import FCNet
 from bc import BCNet
 from counting import Counter
+
+class resnet_modified_medium(nn.Module):
+    def __init__(self):
+        super(resnet_modified_medium, self).__init__()
+        self.resnet = tv.models.resnet50(pretrained=True)
+
+    def base_size(self): return 2048
+    def rep_size(self): return 1024
+
+    def forward(self, x):
+        x = self.resnet.conv1(x)
+        x = self.resnet.bn1(x)
+        x = self.resnet.relu(x)
+        x = self.resnet.maxpool(x)
+
+        x = self.resnet.layer1(x)
+        x = self.resnet.layer2(x)
+        x = self.resnet.layer3(x)
+        x = self.resnet.layer4(x)
+
+        return x
 
 
 class BanModel(nn.Module):
@@ -64,6 +87,81 @@ class BanModel(nn.Module):
 
         return logits, att
 
+class BanModel_ImSitu(nn.Module):
+    def __init__(self, dataset, conv_net, w_emb, q_emb, v_att, b_net, q_prj, classifier, op, glimpse):
+        super(BanModel_ImSitu, self).__init__()
+        self.op = op
+        self.glimpse = glimpse
+        self.dataset = dataset
+        self.conv_net = conv_net
+        self.w_emb = w_emb
+        self.q_emb = q_emb
+        self.v_att = v_att
+        self.b_net = nn.ModuleList(b_net)
+        self.q_prj = nn.ModuleList(q_prj)
+        self.classifier = classifier
+        self.drop = nn.Dropout(.5)
+        self.tanh = nn.Tanh()
+
+
+    def forward(self, img, q):
+        '''
+        v: [batch, num_objs, obj_dim]
+        q: [batch_size, seq_length]
+        '''
+
+        #get cnn feat from images
+        img_features = self.conv_net(img)
+        batch_size, n_channel, conv_h, conv_w = img_features.size()
+
+        img = img_features.view(batch_size, n_channel, -1)
+        img = img.permute(0, 2, 1)
+
+        img = img.expand(self.dataset.encoder.max_role_count,img.size(0), img.size(1), img.size(2))
+        img = img.transpose(0,1)
+        img = img.contiguous().view(batch_size* self.dataset.encoder.max_role_count, -1, n_channel)
+
+        q = q.view(batch_size* self.dataset.encoder.max_role_count, -1)
+        w_emb = self.w_emb(q)
+        q_emb = self.q_emb.forward_all(w_emb) # [batch, q_len, q_dim]
+
+        b_emb = [0] * self.glimpse
+        att, logits = self.v_att.forward_all(img, q_emb) # b x g x v x q
+
+        for g in range(self.glimpse):
+            b_emb[g] = self.b_net[g].forward_with_weights(img, q_emb, att[:,g,:,:]) # b x l x h
+
+            atten, _ = logits[:,g,:,:].max(2)
+
+            q_emb = self.q_prj[g](b_emb[g].unsqueeze(1)) + q_emb
+
+        logits = self.classifier(q_emb.sum(1))
+
+        role_label_pred = logits.contiguous().view(batch_size, self.dataset.encoder.max_role_count, -1)
+
+        return role_label_pred
+
+    def calculate_loss(self, gt_verbs, role_label_pred, gt_labels,args):
+
+        batch_size = role_label_pred.size()[0]
+
+        loss = 0
+        for i in range(batch_size):
+            for index in range(gt_labels.size()[1]):
+                frame_loss = 0
+                #verb_loss = utils.cross_entropy_loss(verb_pred[i], gt_verbs[i])
+                #frame_loss = criterion(role_label_pred[i], gt_labels[i,index])
+                for j in range(0, self.dataset.encoder.max_role_count):
+                    frame_loss += utils_imsitu.cross_entropy_loss(role_label_pred[i][j], gt_labels[i,index,j] ,self.dataset.encoder.get_num_labels())
+                frame_loss = frame_loss/len(self.dataset.encoder.verb2_role_dict[self.dataset.encoder.verb_list[gt_verbs[i]]])
+                #print('frame loss', frame_loss, 'verb loss', verb_loss)
+                loss += frame_loss
+
+
+        final_loss = loss/batch_size
+        #print('loss :', final_loss)
+        return final_loss
+
 class BanModel_flickr(nn.Module):
     def __init__(self, w_emb, q_emb, v_att, op, glimpse):
         super(BanModel_flickr, self).__init__()
@@ -102,10 +200,10 @@ class BanModel_flickr(nn.Module):
         return None, att
 
 
-def build_ban(dataset, num_hid, op='', gamma=4, task='vqa'):
+def build_ban(dataset, num_hid, op='', gamma=4, task='vsrl'):
     w_emb = WordEmbedding(dataset.dictionary.ntoken, 300, .0, op)
     q_emb = QuestionEmbedding(300 if 'c' not in op else 600, num_hid, 1, False, .0)
-    v_att = BiAttention(dataset.v_dim, num_hid, num_hid, gamma)
+    v_att = BiAttention(2048, num_hid, num_hid, gamma)
     if task == 'vqa':
         b_net = []
         q_prj = []
@@ -121,3 +219,14 @@ def build_ban(dataset, num_hid, op='', gamma=4, task='vqa'):
         return BanModel(dataset, w_emb, q_emb, v_att, b_net, q_prj, c_prj, classifier, counter, op, gamma)
     elif task == 'flickr':
         return BanModel_flickr(w_emb, q_emb, v_att, op, gamma)
+
+    elif task == 'vsrl':
+        conv_net = resnet_modified_medium()
+        b_net = []
+        q_prj = []
+        for i in range(gamma):
+            b_net.append(BCNet(2048, num_hid, num_hid, None, k=1))
+            q_prj.append(FCNet([num_hid, num_hid], '', .2))
+        classifier = SimpleClassifier(
+            num_hid, num_hid * 2, dataset.encoder.get_num_labels(), .5)
+        return BanModel_ImSitu(dataset, conv_net, w_emb, q_emb, v_att, b_net, q_prj, classifier, op, gamma)

@@ -566,7 +566,12 @@ def load_net(fname, net_list, prefix_list = None):
     if prefix_list is not None and len(prefix_list) > 0:
         need_modification = True
     for i in range(0, len(net_list)):
-        dict = torch.load(fname)
+        if not torch.cuda.is_available():
+            dict = torch.load(fname, map_location='cpu')
+        else:
+            dict = torch.load(fname)
+
+        print('original dict :', dict)
         try:
             for k, v in net_list[i].state_dict().items():
                 #print('trying to copy :', k, v.size(), v.type())
@@ -578,6 +583,46 @@ def load_net(fname, net_list, prefix_list = None):
                     #print('param size :', param.size(), dict[k].type())
                     v.copy_(param)
                     #print('[Copied]: {}'.format(k))
+                else:
+                    print('[Missed]: {}'.format(k))
+        except Exception as e:
+            print(e)
+            pdb.set_trace()
+            print ('[Loaded net not complete] Parameter[{}] Size Mismatch...'.format(k))
+
+def load_net_ban(fname, net_list, prefix_list = None, remove_list = None):
+    need_modification = False
+    if prefix_list is not None and len(prefix_list) > 0:
+        need_modification = True
+    for i in range(0, len(net_list)):
+        if not torch.cuda.is_available():
+            all_data = torch.load(fname, map_location='cpu')
+        else:
+            all_data = torch.load(fname)
+        dict = all_data.get('model_state', all_data)
+
+        try:
+            for k, v in net_list[i].state_dict().items():
+                if remove_list is not None:
+                    remove = False
+                    for item in remove_list:
+                        if item in k:
+                            #print('ignoring ', k)
+                            remove = True
+                            break
+                    if remove:
+                        continue
+
+                if need_modification:
+                    k = prefix_list[i] + '.' + k
+                if k in dict:
+                    param = torch.from_numpy(np.asarray(dict[k].cpu()))
+                    if v.size() == param.size():
+                        v.copy_(param)
+                        #print('[Copied]: {}'.format(k))
+                    else:
+                        print('size differences :', v.size(), param.size())
+                        print('[Size Missed]: {}'.format(k))
                 else:
                     print('[Missed]: {}'.format(k))
         except Exception as e:

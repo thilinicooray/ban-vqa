@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import random
 from torch.utils.data.dataloader import default_collate
+import utils
 
 class imsitu_loader(data.Dataset):
     def __init__(self, img_dir, annotation_file, encoder, transform=None):
@@ -150,6 +151,55 @@ class imsitu_loader_roleq_updated(data.Dataset):
         if self.transform is not None: img = self.transform(img)
         verb, labels = self.encoder.encode_verb(ann)
         return _id, img, verb, labels
+
+    def __len__(self):
+        return len(self.annotations)
+
+class imsitu_loader_roleq_ban(data.Dataset):
+    def __init__(self, img_dir, annotation_file, encoder, dictionary, transform=None):
+        self.img_dir = img_dir
+        self.annotations = annotation_file
+        self.ids = list(self.annotations.keys())
+        self.encoder = encoder
+        self.dictionary = dictionary
+        self.transform = transform
+
+    def tokenize(self, questions, max_length=15):
+        rquestion_tokens = []
+        """Tokenizes the questions.
+
+        This will add q_token in each entry of the dataset.
+        -1 represent nil, and should be treated as padding_idx in embedding
+        """
+        for entry in questions:
+            tokens = self.dictionary.tokenize(entry, False)
+            tokens = tokens[:max_length]
+            if len(tokens) < max_length:
+                # Note here we pad in front of the sentence
+                padding = [self.dictionary.padding_idx] * (max_length - len(tokens))
+                tokens = tokens + padding
+            utils.assert_eq(len(tokens), max_length)
+            rquestion_tokens.append(torch.tensor(tokens))
+
+        role_padding_count = self.encoder.max_role_count - len(rquestion_tokens)
+
+        #todo : how to handle below sequence making for non roles properly?
+        for i in range(role_padding_count):
+            padding = [self.dictionary.padding_idx] * (max_length)
+            rquestion_tokens.append(torch.tensor(padding))
+
+        return torch.stack(rquestion_tokens,0)
+
+    def __getitem__(self, index):
+        _id = self.ids[index]
+        ann = self.annotations[_id]
+        img = Image.open(os.path.join(self.img_dir, _id)).convert('RGB')
+        #transform must be None in order to give it as a tensor
+        if self.transform is not None: img = self.transform(img)
+        verb, nl_qs, labels = self.encoder.encode_ban(ann)
+        questions = self.tokenize(nl_qs)
+
+        return _id, img, verb, questions, labels
 
     def __len__(self):
         return len(self.annotations)
