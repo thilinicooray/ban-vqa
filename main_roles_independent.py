@@ -335,7 +335,7 @@ def main():
         torch.cuda.manual_seed(1234)
         torch.backends.cudnn.deterministic = True
 
-    elif args.use_pretrained_ban:
+    if args.use_pretrained_ban:
         print('Use pretrained BAN from: {}'.format(args.pretrained_ban_model))
         if len(args.pretrained_ban_model) == 0:
             raise Exception('[pretrained BAN module] not specified')
