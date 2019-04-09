@@ -154,7 +154,7 @@ def train(model, train_loader, dev_loader, traindev_loader, optimizer, scheduler
                 max_score = max(dev_score_list)
 
                 if max_score == dev_score_list[-1]:
-                    torch.save(model.state_dict(), model_dir + "/{}_roles_independent_BANtransfer_resnet50_trainclsonly.model".format( model_name))
+                    torch.save(model.state_dict(), model_dir + "/{}_roles_independent_BANtransfer_resnet50_trainwebqembclsonly.model".format( model_name))
                     print ('New best model saved! {0}'.format(max_score))
 
                 #eval on the trainset
@@ -350,8 +350,13 @@ def main():
 
     utils_imsitu.set_trainable(model, False)
     utils_imsitu.set_trainable(model.classifier, True)
-    optimizer = torch.optim.Adamax(model.classifier.parameters(),
-                                   lr=1e-3)
+    utils_imsitu.set_trainable(model.w_emb, True)
+    utils_imsitu.set_trainable(model.q_emb, True)
+    optimizer = torch.optim.Adamax([
+        {'params': model.classifier.parameters()},
+        {'params': model.w_emb.parameters()},
+        {'params': model.q_emb.parameters()}
+        ], lr=1e-3)
 
     #optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_step, gamma=lr_gamma)
