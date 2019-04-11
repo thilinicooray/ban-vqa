@@ -19,10 +19,12 @@ from fc import FCNet
 from bc import BCNet
 from counting import Counter
 
-class resnet_modified_medium(nn.Module):
+import torchvision as tv
+
+class resnet_152_features(nn.Module):
     def __init__(self):
-        super(resnet_modified_medium, self).__init__()
-        self.resnet = tv.models.resnet50(pretrained=True)
+        super(resnet_152_features, self).__init__()
+        self.resnet = tv.models.resnet152(pretrained=True)
 
     def base_size(self): return 2048
     def rep_size(self): return 1024
@@ -82,6 +84,54 @@ class BanModel(nn.Module):
 
             q_emb = self.q_prj[g](b_emb[g].unsqueeze(1)) + q_emb
             q_emb = q_emb + self.c_prj[g](embed).unsqueeze(1)
+
+        logits = self.classifier(q_emb.sum(1))
+
+        return logits, att
+
+class BanModelGrid(nn.Module):
+    def __init__(self, conv_net, dataset, w_emb, q_emb, v_att, b_net, q_prj, classifier, op, glimpse):
+        super(BanModelGrid, self).__init__()
+        self.dataset = dataset
+        self.conv_net = conv_net
+        self.op = op
+        self.glimpse = glimpse
+        self.w_emb = w_emb
+        self.q_emb = q_emb
+        self.v_att = v_att
+        self.b_net = nn.ModuleList(b_net)
+        self.q_prj = nn.ModuleList(q_prj)
+        self.classifier = classifier
+        self.drop = nn.Dropout(.5)
+        self.tanh = nn.Tanh()
+
+    def forward(self, v, q, labels):
+        """Forward
+
+        v: [batch, num_objs, obj_dim]
+        b: [batch, num_objs, b_dim]
+        q: [batch_size, seq_length]
+
+        return: logits, not probs
+        """
+        img_features = self.conv_net(v)
+        batch_size, n_channel, conv_h, conv_w = img_features.size()
+
+        img = img_features.view(batch_size, n_channel, -1)
+        v = img.permute(0, 2, 1)
+
+        w_emb = self.w_emb(q)
+        q_emb = self.q_emb.forward_all(w_emb) # [batch, q_len, q_dim]
+
+        b_emb = [0] * self.glimpse
+        att, logits = self.v_att.forward_all(v, q_emb) # b x g x v x q
+
+        for g in range(self.glimpse):
+            b_emb[g] = self.b_net[g].forward_with_weights(v, q_emb, att[:,g,:,:]) # b x l x h
+
+            atten, _ = logits[:,g,:,:].max(2)
+
+            q_emb = self.q_prj[g](b_emb[g].unsqueeze(1)) + q_emb
 
         logits = self.classifier(q_emb.sum(1))
 
@@ -221,7 +271,7 @@ def build_ban(dataset, num_hid, op='', gamma=4, task='vsrl'):
         return BanModel_flickr(w_emb, q_emb, v_att, op, gamma)
 
     elif task == 'vsrl':
-        conv_net = resnet_modified_medium()
+        conv_net = resnet_152_features()
         b_net = []
         q_prj = []
         for i in range(gamma):
@@ -230,3 +280,21 @@ def build_ban(dataset, num_hid, op='', gamma=4, task='vsrl'):
         classifier = SimpleClassifier(
             num_hid, num_hid * 2, dataset.encoder.get_num_labels(), .5)
         return BanModel_ImSitu(dataset, conv_net, w_emb, q_emb, v_att, b_net, q_prj, classifier, op, gamma)
+
+def build_bangrid(dataset, num_hid, op='', gamma=4, task='vqa'):
+    conv_net = resnet_152_features()
+    w_emb = WordEmbedding(dataset.dictionary.ntoken, 300, .0, op)
+    q_emb = QuestionEmbedding(300 if 'c' not in op else 600, num_hid, 1, False, .0)
+    v_att = BiAttention(2048, num_hid, num_hid, gamma)
+    if task == 'vqa':
+        b_net = []
+        q_prj = []
+        for i in range(gamma):
+            b_net.append(BCNet(2048, num_hid, num_hid, None, k=1))
+            q_prj.append(FCNet([num_hid, num_hid], '', .2))
+        classifier = SimpleClassifier(
+            num_hid, num_hid * 2, dataset.num_ans_candidates, .5)
+        return BanModelGrid(conv_net, dataset, w_emb, q_emb, v_att, b_net, q_prj, classifier, op, gamma)
+    elif task == 'flickr':
+        return BanModel_flickr(w_emb, q_emb, v_att, op, gamma)
+

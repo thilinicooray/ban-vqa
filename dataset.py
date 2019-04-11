@@ -18,6 +18,8 @@ from torch.utils.data import Dataset
 import tools.compute_softscore
 import itertools
 import re
+from PIL import Image
+import torchvision as tv
 
 COUNTING_ONLY = False
 
@@ -414,6 +416,110 @@ class VQAFeatureDataset(Dataset):
             return features, spatials, question, target
         else:
             return features, spatials, question, question_id
+
+    def __len__(self):
+        return len(self.entries)
+
+class VQAGridDataset(Dataset):
+    def __init__(self, img_dir, image_filenames, name, dictionary, dataroot='data', adaptive=False):
+        super(VQAGridDataset, self).__init__()
+        assert name in ['train', 'val', 'test-dev2015', 'test2015']
+        self.img_dir = img_dir
+        self.image_filenames = image_filenames
+        ans2label_path = os.path.join(dataroot, 'cache', 'trainval_ans2label.pkl')
+        label2ans_path = os.path.join(dataroot, 'cache', 'trainval_label2ans.pkl')
+        self.ans2label = cPickle.load(open(ans2label_path, 'rb'))
+        self.label2ans = cPickle.load(open(label2ans_path, 'rb'))
+        self.num_ans_candidates = len(self.ans2label)
+
+        self.dictionary = dictionary
+        self.adaptive = adaptive
+
+        self.img_id2idx = cPickle.load(
+            open(os.path.join(dataroot, '%s%s_imgid2idx.pkl' % (name, '' if self.adaptive else '36')), 'rb'))
+
+        self.normalize = tv.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        self.train_transform = tv.transforms.Compose([
+            tv.transforms.RandomRotation(10),
+            tv.transforms.RandomResizedCrop(224),
+            tv.transforms.RandomHorizontalFlip(),
+            tv.transforms.ToTensor(),
+            self.normalize,
+        ])
+
+        self.dev_transform = tv.transforms.Compose([
+            tv.transforms.Resize(224),
+            tv.transforms.CenterCrop(224),
+            tv.transforms.ToTensor(),
+            self.normalize,
+        ])
+
+        self.transform = self.train_transform if name == 'train' else self.dev_transform
+
+        self.entries = _load_dataset(dataroot, name, self.img_id2idx, self.label2ans)
+        self.tokenize()
+        self.tensorize()
+        #self.v_dim = self.features.size(1 if self.adaptive else 2)
+        #self.s_dim = self.spatials.size(1 if self.adaptive else 2)
+
+    def tokenize(self, max_length=14):
+        """Tokenizes the questions.
+
+        This will add q_token in each entry of the dataset.
+        -1 represent nil, and should be treated as padding_idx in embedding
+        """
+        for entry in self.entries:
+            tokens = self.dictionary.tokenize(entry['question'], False)
+            tokens = tokens[:max_length]
+            if len(tokens) < max_length:
+                # Note here we pad in front of the sentence
+                padding = [self.dictionary.padding_idx] * (max_length - len(tokens))
+                tokens = tokens + padding
+            utils.assert_eq(len(tokens), max_length)
+            entry['q_token'] = tokens
+
+    def tensorize(self):
+        #self.features = torch.from_numpy(self.features)
+        #self.spatials = torch.from_numpy(self.spatials)
+
+        for entry in self.entries:
+            question = torch.from_numpy(np.array(entry['q_token']))
+            entry['q_token'] = question
+
+            answer = entry['answer']
+            if None!=answer:
+                labels = np.array(answer['labels'])
+                scores = np.array(answer['scores'], dtype=np.float32)
+                if len(labels):
+                    labels = torch.from_numpy(labels)
+                    scores = torch.from_numpy(scores)
+                    entry['answer']['labels'] = labels
+                    entry['answer']['scores'] = scores
+                else:
+                    entry['answer']['labels'] = None
+                    entry['answer']['scores'] = None
+
+    def __getitem__(self, index):
+        entry = self.entries[index]
+        image_id = entry['image_id']
+        file_name = self.image_filenames[str(image_id)]
+        img = Image.open(os.path.join(self.img_dir, file_name)).convert('RGB')
+        #transform must be None in order to give it as a tensor
+        img = self.transform(img)
+
+        question = entry['q_token']
+        question_id = entry['question_id']
+        answer = entry['answer']
+        if None!=answer:
+            labels = answer['labels']
+            scores = answer['scores']
+            target = torch.zeros(self.num_ans_candidates)
+            if labels is not None:
+                target.scatter_(0, labels, scores)
+            return img, question, target
+        else:
+            return img, question, question_id
 
     def __len__(self):
         return len(self.entries)
