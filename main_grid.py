@@ -21,7 +21,7 @@ from dataset import tfidf_from_questions
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--task', type=str, default='vqa', help='vqa or flickr')
-    parser.add_argument('--epochs', type=int, default=13)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--num_hid', type=int, default=1280)
     parser.add_argument('--model', type=str, default='bangrid')
     parser.add_argument('--op', type=str, default='c')
@@ -51,7 +51,7 @@ if __name__ == '__main__':
         dictionary = Dictionary.load_from_file(dict_path)
         image_filenames = json.load(open("data/coco_img_file_mapping.json"))
         train_dset = VQAGridDataset(args.imgset_dir + '/train2014',image_filenames,'train', dictionary)
-        eval_dset = VQAGridDataset(args.imgset_dir + '/val2014',image_filenames, 'val', dictionary)
+        val_dset = VQAGridDataset(args.imgset_dir + '/val2014',image_filenames, 'val', dictionary)
         w_emb_path = 'data/glove6b_init_300d.npy'
 
     elif args.task == 'flickr':
