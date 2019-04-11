@@ -112,8 +112,10 @@ if __name__ == '__main__':
             train_loader = DataLoader(trainval_dset, batch_size, shuffle=True, num_workers=3, collate_fn=utils.trim_collate)
             eval_loader = None
         else:
-            train_loader = DataLoader(train_dset, batch_size, shuffle=True, num_workers=3, collate_fn=utils.trim_collate)
-            eval_loader = DataLoader(val_dset, batch_size, shuffle=False, num_workers=3, collate_fn=utils.trim_collate)
+            #train_loader = DataLoader(train_dset, batch_size, shuffle=True, num_workers=3, collate_fn=utils.trim_collate)
+            #eval_loader = DataLoader(val_dset, batch_size, shuffle=False, num_workers=3, collate_fn=utils.trim_collate)
+            train_loader = DataLoader(train_dset, batch_size, shuffle=True, num_workers=3)
+            eval_loader = DataLoader(val_dset, batch_size, shuffle=False, num_workers=3)
 
     elif args.task == 'flickr':
         train_loader = DataLoader(train_dset, batch_size, shuffle=True, num_workers=1, collate_fn=utils.trim_collate)

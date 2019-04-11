@@ -43,7 +43,7 @@ def train(model, train_loader, eval_loader, num_epochs, output, opt=None, s_epoc
     logger = utils.Logger(os.path.join(output, 'log.txt'))
     best_eval_score = 0
 
-    utils.print_model(model, logger)
+    #utils.print_model(model, logger)
     logger.write('optim: adamax lr=%.4f, decay_step=%d, decay_rate=%.2f, grad_clip=%.2f' % \
                  (lr_default, lr_decay_step, lr_decay_rate, grad_clip))
 
